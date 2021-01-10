@@ -1,0 +1,634 @@
+---
+title: "Data Science Transport"
+author: "Schulze, Michael"
+date: "1/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# update.packages()
+library(tidyverse)
+library(tidytransit)
+library(dplyr)
+library(patchwork) # multiple plots in one
+library(leaflet) # leaflet maps
+library(sf)
+```
+
+## Preface
+
+This is the code of a mid-semester assignment for the TU Berlin Module Data Science for agent-based transport simulations WiSe 20/21.
+The aim was to look into the GTFS Data of the VBB Berlin transport association.
+
+```{r}
+# setwd for switching between folders
+setwd_gtfs <- function(){setwd("~/DataScienceTransport/data/vbb-gtfs")}
+setwd_data <- function(){setwd("~/DataScienceTransport/data")}
+setwd_work <- function(){setwd("~/DataScienceTransport/assignment_1")}
+
+# reading the file
+setwd_gtfs()
+gtfs_vbb_2020_12 <- read_gtfs("2020-12_2020-12-28.zip")
+setwd_work()
+
+# single out the data sets
+routes = gtfs_vbb_2020_12$routes
+stops = gtfs_vbb_2020_12$stops
+trips = gtfs_vbb_2020_12$trips
+transfers = gtfs_vbb_2020_12$transfers
+agency = gtfs_vbb_2020_12$agency
+stoptime = gtfs_vbb_2020_12$stop_times
+```
+
+## Preparation
+Trying to get some interesting data on the service density, we want to count the passings of each stop. By that we get the information about how often a stop location is serviced. The analysis was reduced to the agencies BVG and S-Bahn Berlin. The modes were limited to bus (BVG), tram (~light train) (BVG), U-Bahn (~metro) (BVG) and S-Bahn (DB).
+Since the most services are symmetrical, we don't want to count the stop passings of one stop location for two directions. One direction should be deleted from the data set. Trying not to remove a non symmetrical service, like the Ring-Bahn, we identified all non symmetrical services, whose data points won't be touched. This proufed to be unneccesary since non symmetrical service only have a direction_id 0. So, deleting by direction_id 1 would have been enough.
+
+```{r}
+# identify non symmetrical services
+one_directer <- routes %>% 
+  left_join(trips) %>% 
+  select(route_id, route_short_name, agency_id, route_type, trip_headsign, direction_id) %>% 
+  group_by(route_short_name) %>% 
+  summarise(uni_dir = (unique(direction_id))) %>% 
+  count(route_short_name) %>% 
+  filter(n < 2) %>% 
+  select(route_short_name)
+one_directer <- one_directer[["route_short_name"]]
+
+head(one_directer)
+
+# Filter for BVG and S-Bahn Berlin
+agency_filter = "[Bb]erlin"
+
+# Get coordinates for each stop
+berlin = agency %>% 
+  select(agency_id, agency_name) %>% 
+  filter(str_detect(agency_name, agency_filter)) %>% 
+  inner_join(select(routes, route_short_name, agency_id, route_id, route_type)) %>% 
+  inner_join(select(trips, route_id, trip_id)) %>% 
+  inner_join(select(stoptime, trip_id, stop_id)) %>% 
+  select(-trip_id) %>% unique() %>% 
+  inner_join(select(stops, stop_id, stop_name, lat=stop_lat, lon=stop_lon)) %>% 
+  unique()
+
+# building a selective stops count tibble including the counts of trips passings
+berlin_cnt = agency %>% 
+  select(agency_id, agency_name) %>% 
+  filter(str_detect(agency_name, agency_filter)) %>% 
+  inner_join(select(routes, route_short_name, agency_id, route_id, route_type)) %>% 
+  inner_join(select(trips, route_id, trip_id, direction_id)) %>% 
+  # filter out one direction for symmetrical service
+  filter(route_short_name %in% one_directer | !(route_short_name %in% one_directer) & direction_id == 0) %>% 
+  inner_join(select(stoptime, trip_id, stop_id)) %>% 
+  group_by(agency_id, stop_id, route_type) %>% summarise(cnt = n()) %>% 
+  inner_join(select(stops, stop_id, stop_name, lat = stop_lat, lon = stop_lon)) %>% 
+  unique()
+
+head(berlin_cnt)
+```
+
+We can limit the analysis by filtering out some modes. Ferries were of no interest. The massive data points for the busses can dominate any map plots.
+
+```{r}
+berlin = berlin %>%
+  filter(route_type != 1000) # remove ferries
+  # filter(route_type != 700) # remove busses
+   
+  # berlin_cnt = berlin_cnt %>%
+  # filter(route_type != 700)
+```
+
+## Plotting stop locations and passings count
+
+This plots the stops by location and modifies the circle size based on the ranked insed the mode.
+
+```{r}
+# colour definition (modes)
+berlin_modes = data.frame(route_type = c(700, 109, 400, 900),
+                          mot = factor(x = c("Bus", "SBahn", "UBahn", "Tram"),
+                                       levels = c("Bus", "SBahn", "UBahn", "Tram")
+                                       )
+                          )
+factpal = colorFactor(palette = c("#9b266d", "#368334", "#4990bc", "#c50800"),
+                      domain = berlin_modes$mot,
+                      levels = levels(berlin_modes$mot),
+                      ordered = FALSE,
+                      na.color = "#808080",
+                      alpha = FALSE
+                      )
+
+# add modes to berlin stop count
+# add bins to each MoT group for plot
+berlin_cnt = berlin_cnt %>% 
+  left_join(berlin_modes) %>%
+  group_by(mot) %>% 
+  mutate(bin = ntile(cnt, n = 8))
+
+# preview the available map backgrounds: https://leaflet-extras.github.io/leaflet-providers/preview/
+m = leaflet() %>%
+  # Add CartoDB background map
+  addProviderTiles("CartoDB.DarkMatter") %>%  
+  # Add a marker for each stop
+  addCircleMarkers(lng= ~ lon, lat= ~lat, data = berlin_cnt,
+                   stroke = FALSE, fillOpacity = 0.5, radius = ~(bin/2),
+                   # adjust radius depending on deseired view
+                   color = ~ factpal(mot)
+                   ) %>% 
+  addLegend(colors = c("#9b266d", "#368334", "#4990bc", "#c50800"),
+            labels = levels(berlin_cnt$mot), title = "Mode of Transport")
+m  # Show
+```
+
+## Plotting map of service density
+
+### Preration
+
+Trying to aggregate the information of the stop passings count, we focused on a analysis by districts. For this we need the shapes.
+
+```{r}
+# source: https://www.stadtentwicklung.berlin.de/planen/basisdaten_stadtentwicklung/lor/de/download.shtml
+# Prognoseraum - lor_pgr
+# Bezirksregion - lor_bzr
+# Planungsraum - lor_plr 
+
+# read data
+setwd_data()
+shape_districts_new <- read_sf(dsn = "LOR_SHP_2019-1", layer = "Planungsraum_EPSG_25833")
+setwd_work()
+
+# wrangle
+shape_districts_new <- shape_districts_new %>% 
+  group_by(BEZIRK) %>% 
+  summarise() %>% 
+  filter(!is.na(BEZIRK)) %>% 
+  rename(NAME = BEZIRK) %>% 
+  mutate(AREA = st_area(geometry)) %>% 
+  select(NAME, AREA, everything())
+
+# setting crs of polygons
+st_crs(shape_districts_new$geometry) <- 25833
+```
+
+Maybe one can combine the service information by district with data about the population.
+
+```{r, echo=FALSE}
+# source: https://daten.berlin.de/datensaetze/einwohnerinnen-und-einwohner-den-ortsteilen-berlins-am-31122019
+# read data
+setwd_data()
+pop_districts <- readr::read_delim("EWR_Ortsteile_2019-12-31.csv",
+                                   locale = locale(encoding = "latin1"),
+                                   delim=";"
+                                   )
+setwd_work()
+
+# rename columns
+names(pop_districts) <- c("DISTRICT", "DISTRICT_NAME", "DISTRICT_PART",
+                          "DISTRICT_PART_NAME", "GENDER", "NATIONALITY",
+                          "AGE_BIN", "FREQ"
+                          )
+# data: district name, age bin, frequency
+pop_districts <- pop_districts %>% 
+  group_by(DISTRICT_NAME, AGE_BIN) %>% 
+  summarise(FREQ = sum(FREQ))
+
+# sum over all ages for each district
+pop_districts_sum <- pop_districts %>% 
+  group_by(DISTRICT_NAME) %>% 
+  summarise(POPULATION = sum(FREQ)) %>% 
+  ungroup()
+
+head(pop_districts_sum)
+```
+
+The population data can be merged with the districts shapes. One has to make sure that it stays a sf object.
+
+```{r}
+# merging
+shape_super <- pop_districts_sum %>%
+  rename(NAME = DISTRICT_NAME) %>%
+  left_join(shape_districts_new) %>% 
+  st_sf()
+
+# transforming stop coordinates
+points <- data.frame(lon = berlin_cnt$lon,
+                     lat = berlin_cnt$lat) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, agr = "constant") %>% 
+  st_transform(25833)
+
+# adding to berlin_cnt
+berlin_cnt <- berlin_cnt %>%
+  ungroup() %>% 
+  add_column(point = points$geometry) %>% 
+  select(-lat, -lon)
+
+remove(points)
+
+head(berlin_cnt)
+```
+
+Finishing the final tibble icluding all data for the plot of stop passings by districts.
+In our case (mot = NA) means ferries and (bezirk = NA) hints at a data point outside berlin.
+The steps of data wrangling include:
+* getting the districts name of the stop
+* getting the sum of all stops passings per district
+* removing outer berlin and ferries
+* pivoting into wider form for modes
+* replacing NAs with zeros
+* join with the district shapes
+* setting as sf object (attribute keeps getting lost by joining (needed for plot))
+
+```{r}
+berlin_cnt_super <- berlin_cnt %>% 
+  mutate(
+    bezirk = shape_super[as.numeric(st_within(point, shape_super)),]$NAME
+    ) %>% 
+  group_by(bezirk, mot) %>% 
+  summarise(n = sum(cnt)) %>% 
+  filter(
+    !(is.na(bezirk)) & !(is.na(mot))
+    ) %>% 
+  pivot_wider(names_from = mot, values_from = n) %>% 
+  mutate_all(
+    ~replace(., is.na(.), 0)
+    )%>% 
+  rename(NAME = bezirk,
+         BUS = Bus,
+         SBAHN = SBahn,
+         UBAHN = UBahn,
+         TRAM = Tram
+         ) %>% 
+  mutate(
+    ALL_MODES = sum(BUS, TRAM, SBAHN, UBAHN)
+    ) %>% 
+  left_join(shape_super) %>% 
+  select(NAME, POPULATION, AREA,
+         BUS, TRAM, UBAHN,
+         SBAHN, ALL_MODES, geometry
+         ) %>% 
+  st_sf()
+
+head(berlin_cnt_super)
+```
+
+It would be nice to have the number of stops per mode, but one can see a lot of stops per route unused by main line service, used by detour trips (maybe caused by construction work).
+More work is necessary.
+
+Only rough conclusions concerning the spatial distribution of service are possible. They might really be misleading and if not, should be made by mode with the network in mind.
+
+### Barplot
+
+This barplot shows the stop passings by districs.
+
+```{r}
+plot_bar_cnt <- berlin_cnt_super %>% 
+  st_drop_geometry() %>% 
+  pivot_longer(c(BUS, TRAM, UBAHN, SBAHN), names_to = "MODE", values_to = "N") %>% 
+  ggplot() + 
+  geom_bar(mapping = aes(x = NAME, y = N, fill = MODE),
+           stat = "identity",
+           position = "dodge") +
+  coord_flip() +
+  guides(x = guide_axis(angle = 0)) +
+  scale_fill_manual(
+    values = c("#9b266d", "#368334", "#c50800", "#4990bc")
+    ) +
+  theme() +
+  labs(title = "Number of passing trips",
+       subtitle = "per district",
+       x = "",
+       y = "",
+       fill = "Mode"
+       )
+
+plot_bar_cnt
+```
+
+### Reminder: population density
+
+If we want to use the data on the population size / age, it's useful to remind us of the denisty per district (we didn't find more detailed information).
+
+```{r}
+lwd = 0.1
+
+plot_distr_pop <- berlin_cnt_super %>% 
+  mutate(
+    POP_DENSITY = POPULATION / (AREA / 1000000)
+    ) %>% 
+  ggplot() + 
+  geom_sf(mapping = aes(fill = POP_DENSITY),
+          show.legend = TRUE,
+          lwd = lwd,
+          ) + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        ) +
+  labs(#title = "Density",
+       #subtitle = expression(paste("Population [people / ", km^2, "]")),
+       subtitle = expression(paste("Population")),
+       x = "",
+       y = "",
+       #fill = element_blank()
+       fill = expression(paste(frac("people", km^2)))
+       )
+
+plot_distr_pop
+```
+
+### Service density plot by district
+
+First we look at stops passings density by district area size for all modes.
+For further plots, look into Rmd file or modify the code. The things that change are the tibble column, colour palette, subtitle and legend title.
+
+```{r}
+plot_distr_serv_all <- berlin_cnt_super %>% 
+  mutate(
+    STOP_SERVICE_DENSITY = ALL_MODES / (AREA / 1000000)
+    ) %>% 
+  ggplot() + 
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          show.legend = TRUE,
+          lwd = lwd
+          ) +
+  scale_fill_distiller(palette = "Greys") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+        ) +
+  labs(#title = "Service density all modes",
+       #subtitle = expression(paste("Service all modes [passings / ", km^2, "]")),
+       subtitle = expression(paste("Service all modes")),
+       x = "",
+       y = "",
+       #fill = element_blank()
+       fill = expression(paste(frac("passings", km^2)))
+       )
+
+plot_distr_serv_all
+```
+
+Can we get some insight by plotting the stop passings count against the population size?
+
+```{r, echo = FALSE}
+plot_distr_serv_person <- berlin_cnt_super %>% 
+  mutate(
+    STOP_SERVICE_DENSITY = ALL_MODES / POPULATION
+  ) %>% 
+  ggplot() + 
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          lwd = lwd,
+          show.legend = TRUE
+  ) +
+  scale_fill_distiller(palette = "Greys") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+  ) +
+  labs(#title = "Service density all modes per person",
+    #subtitle = expression(paste("Service all modes [passings / person]")),
+    subtitle = expression(paste("Service all modes")),
+    x = "",
+    y = "",
+    #fill = element_blank()
+    fill = expression(paste(frac("passings", "person")))
+  )
+
+plot_distr_serv_person
+```
+
+One thing we can see is that Spandau is blessed with a lot of stop passings (especially bus) compared with its low population density.
+
+### Service density plot by Planungsraum
+
+The mapping by district is very coarse. We swith to plotting by mode and by the more detailed Planungsräume. Here the code for one mode.
+
+```{r}
+# reread data after wrangling
+setwd_data()
+shape_districts_parts <- read_sf(dsn = "LOR_SHP_2019-1", layer = "Planungsraum_EPSG_25833")
+setwd_work()
+
+shape_districts_parts <- shape_districts_parts %>% 
+  group_by(SCHLUESSEL) %>% 
+  summarise() %>% 
+  filter(!is.na(SCHLUESSEL)) %>% 
+  #rename(NAME = BEZIRKSREG) %>% 
+  mutate(AREA = st_area(geometry)) %>% 
+  select(SCHLUESSEL, AREA, everything()) %>% 
+  st_sf()
+
+st_crs(shape_districts_parts) <- 25833
+
+# pepare data for different plots
+pre_plot_part <- berlin_cnt %>% 
+  mutate(
+    SCHLUESSEL = shape_districts_parts[as.numeric(st_within(point, shape_districts_parts)),]$SCHLUESSEL
+  ) %>% 
+  group_by(SCHLUESSEL, mot) %>% 
+  summarise(n = sum(cnt)) %>% 
+  filter(
+    !(is.na(SCHLUESSEL)) & !(is.na(mot))
+  ) %>% 
+  pivot_wider(names_from = mot, values_from = n) %>% 
+  mutate_all(
+    ~replace(., is.na(.), 0)
+  ) %>% 
+  rename(BUS = Bus,
+         SBAHN = SBahn,
+         UBAHN = UBahn,
+         TRAM = Tram
+  ) %>% 
+  mutate(
+    ALL_MODES = sum(BUS, TRAM, SBAHN, UBAHN)
+  ) %>% 
+  left_join(shape_districts_parts) %>% 
+  select(SCHLUESSEL, AREA, BUS,
+         TRAM, UBAHN, SBAHN,
+         ALL_MODES, geometry
+  ) %>% 
+  st_sf()
+
+head(pre_plot_part)
+
+# plot stop passings by planungsraum for tram
+plot_plan_serv_tram <- pre_plot_part %>%
+  mutate(
+    STOP_SERVICE_DENSITY = TRAM / (AREA / 1000000)
+    ) %>% 
+  ggplot() + 
+  # extra underlying black shape, because transparent polygons
+  geom_sf(data = shape_districts_new,
+          fill = "#9f0000",
+          lwd = 0,
+          show.legend = FALSE
+          ) +
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          lwd = lwd,
+          show.legend = TRUE
+          ) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+        ) +
+  scale_fill_distiller(palette = "Reds") +
+  labs(#title = "Service all modes per Planungsraum",
+    #subtitle = expression(paste("Service TRAM per Planungsraum [passings / ", km^2, "]")),
+    x = "",
+    y = "",
+    fill = element_blank()
+    )
+
+plot_plan_serv_tram
+```
+
+
+```{r, echo = FALSE}
+##############################################################
+#   plot districts part, service density Bus
+##############################################################
+plot_plan_serv_bus <- pre_plot_part %>%
+  mutate(
+    STOP_SERVICE_DENSITY = BUS / (AREA / 1000000)
+  ) %>% 
+  ggplot() + 
+  # extra underlying black shape, because transparent polygons
+  geom_sf(data = shape_districts_new,
+          fill = "#811077",
+          lwd = 0,
+          show.legend = FALSE
+  ) +
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          lwd = lwd,
+          show.legend = TRUE
+  ) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+  ) +
+  scale_fill_distiller(palette = "RdPu") +
+  labs(#title = "Service all modes per Planungsraum",
+    #subtitle = expression(paste("Service TRAM per Planungsraum [passings / ", km^2, "]")),
+    x = "",
+    y = "",
+    fill = element_blank()
+  )
+##############################################################
+#   plot districts part, service density S-Bahn
+##############################################################
+plot_plan_serv_s <- pre_plot_part %>%
+  mutate(
+    STOP_SERVICE_DENSITY = SBAHN / (AREA / 1000000)
+  ) %>% 
+  ggplot() + 
+  # extra underlying black shape, because transparent polygons
+  geom_sf(data = shape_districts_new,
+          fill = "#005a30",
+          lwd = 0,
+          show.legend = FALSE
+  ) +
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          lwd = lwd,
+          show.legend = TRUE
+  ) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+  ) +
+  scale_fill_distiller(palette = "Greens") +
+  labs(#title = "Service all modes per Planungsraum",
+    #subtitle = expression(paste("Service S-Bahn per Planungsraum [passings / ", km^2, "]")),
+    x = "",
+    y = "",
+    fill = element_blank()
+  )
+##############################################################
+#   plot districts part, service density U-Bahn
+##############################################################
+plot_plan_serv_u <- pre_plot_part %>%
+  mutate(
+    STOP_SERVICE_DENSITY = UBAHN / (AREA / 1000000)
+  ) %>% 
+  ggplot() + 
+  # extra underlying black shape, because transparent polygons
+  geom_sf(data = shape_districts_new,
+          fill = "#004b97",
+          lwd = 0,
+          show.legend = FALSE
+  ) +
+  geom_sf(mapping = aes(fill = STOP_SERVICE_DENSITY),
+          lwd = lwd,
+          show.legend = TRUE
+  ) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        #plot.background = element_rect(fill = "#000000", color = "black"),
+        #panel.background = element_rect(fill = "#000000", color = "black"), 
+        axis.line.x = element_blank(), 
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank()
+  ) +
+  scale_fill_distiller(palette = "Blues") +
+  labs(#title = "Service all modes per Planungsraum",
+    #subtitle = expression(paste("Service U-Bahn per Planungsraum [passings / ", km^2, "]")),
+    x = "",
+    y = "",
+    fill = element_blank()
+  )
+
+plot_plan_serv_bus
+plot_plan_serv_s
+plot_plan_serv_u
+```
+
+## list of sources
+
+https://rstudio-pubs-static.s3.amazonaws.com/234589_8188f8d6471f412b94dbc61f7b1aaa16.html (a lot)
+https://www.r-spatial.org/r/2018/10/25/ggplot2-sf-2.html
+https://r-spatial.github.io/sf/reference/st_transform.html
+https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
+https://stackoverflow.com/questions/43456524/how-to-find-which-polygon-a-point-belong-to-via-sf
+https://stackoverflow.com/questions/8161836/how-do-i-replace-na-values-with-zeros-in-an-r-dataframe#8166616
