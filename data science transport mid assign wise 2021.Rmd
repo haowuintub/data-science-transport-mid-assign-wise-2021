@@ -18,8 +18,8 @@ library(sf)
 
 ## Preface
 
-This is the code of a mid-semester assignment for the TU Berlin Module Data Science for agent-based transport simulations WiSe 20/21.
-The aim was to look into the GTFS Data of the VBB Berlin transport association.
+This is the [code](https://github.com/bernd886/data-science-transport-mid-assign-wise-2021) of a mid-semester assignment for the TU Berlin Module [Data Science for agent-based transport simulations WiSe 20/21](https://web.archive.org/web/20210207122933if_/https://moseskonto.tu-berlin.de/moses/modultransfersystem/bolognamodule/beschreibung/anzeigen.html?number=50921&version=1&sprache=2).
+The aim was to look into the [GTFS Data of the VBB Berlin](https://www.vbb.de/unsere-themen/vbbdigital/api-entwicklerinfos/datensaetze) transport association, published on the [28th December 2020](http://transitfeeds.com/p/verkehrsverbund-berlin-brandenburg/213/20201228). 
 
 ```{r}
 # setwd for switching between folders
@@ -42,8 +42,8 @@ stoptime = gtfs_vbb_2020_12$stop_times
 ```
 
 ## Preparation
-Trying to get some interesting data on the service density, we want to count the passings of each stop. By that we get the information about how often a stop location is serviced. The analysis was reduced to the agencies BVG and S-Bahn Berlin. The modes were limited to bus (BVG), tram (~light train) (BVG), U-Bahn (~metro) (BVG) and S-Bahn (DB).
-Since the most services are symmetrical, we don't want to count the stop passings of one stop location for two directions. One direction should be deleted from the data set. Trying not to remove a non symmetrical service, like the Ring-Bahn, we identified all non symmetrical services, whose data points won't be touched. This proufed to be unneccesary since non symmetrical service only have a direction_id 0. So, deleting by direction_id 1 would have been enough.
+Trying to get some interesting data on the service density, we want to count the passings of each stop. By that we get the information about how often a stop location is serviced. The analysis was reduced to the agencies [BVG](https://en.wikipedia.org/wiki/Berliner_Verkehrsbetriebe) and [S-Bahn Berlin](https://en.wikipedia.org/wiki/Berlin_S-Bahn). The modes were limited to bus (BVG), tram (~light train) (BVG), U-Bahn (~metro) (BVG) and S-Bahn (DB).
+Since the most services are symmetrical, we don't want to count the stop passings of one stop location for two directions. One direction should be deleted from the data set. Trying not to remove a non symmetrical service, like the [Ring-Bahn](https://en.wikipedia.org/wiki/Berlin_Ringbahn), we identified all non symmetrical services, whose data points won't be touched. This proufed to be unneccesary since non symmetrical service only have a *direction_id 0*. So, deleting by *direction_id 1* would have been enough.
 
 ```{r}
 # identify non symmetrical services
@@ -141,17 +141,16 @@ m = leaflet() %>%
 m  # Show
 ```
 
-## Plotting map of service density
+## Plotting service density by districs
 
 ### Preration
 
-Trying to aggregate the information of the stop passings count, we focused on a analysis by districts. For this we need the shapes.
+Trying to aggregate the information of the stop passings count, we focused on a analysis by districts. For this we need the shapes. [The files](https://web.archive.org/web/20190624123508/https://www.stadtentwicklung.berlin.de/planen/basisdaten_stadtentwicklung/lor/de/download.shtml) also include the more detailed [LOR](https://de.wikipedia.org/wiki/Lebensweltlich_orientierte_R%C3%A4ume).
 
 ```{r}
-# source: https://www.stadtentwicklung.berlin.de/planen/basisdaten_stadtentwicklung/lor/de/download.shtml
 # Prognoseraum - lor_pgr
 # Bezirksregion - lor_bzr
-# Planungsraum - lor_plr 
+# Planungsraum - lor_plr
 
 # read data
 setwd_data()
@@ -171,10 +170,9 @@ shape_districts_new <- shape_districts_new %>%
 st_crs(shape_districts_new$geometry) <- 25833
 ```
 
-Maybe one can combine the service information by district with data about the population.
+Maybe one can combine the service information by district with [data about the population](https://web.archive.org/web/20201031083148/https://daten.berlin.de/datensaetze/einwohnerinnen-und-einwohner-den-ortsteilen-berlins-am-31122019). 
 
 ```{r, echo=FALSE}
-# source: https://daten.berlin.de/datensaetze/einwohnerinnen-und-einwohner-den-ortsteilen-berlins-am-31122019
 # read data
 setwd_data()
 pop_districts <- readr::read_delim("EWR_Ortsteile_2019-12-31.csv",
@@ -231,13 +229,19 @@ head(berlin_cnt)
 Finishing the final tibble icluding all data for the plot of stop passings by districts.
 In our case (mot = NA) means ferries and (bezirk = NA) hints at a data point outside berlin.
 The steps of data wrangling include:
-* getting the districts name of the stop
-* getting the sum of all stops passings per district
-* removing outer berlin and ferries
-* pivoting into wider form for modes
-* replacing NAs with zeros
-* join with the district shapes
-* setting as sf object (attribute keeps getting lost by joining (needed for plot))
+- getting the districts name of the stop
+
+- getting the sum of all stops passings per district
+
+- removing outer berlin and ferries
+
+- pivoting into wider form for modes
+
+- replacing NAs with zeros
+
+- join with the district shapes
+
+- setting as sf object (attribute keeps getting lost by joining (needed for plot))
 
 ```{r}
 berlin_cnt_super <- berlin_cnt %>% 
@@ -342,7 +346,7 @@ plot_distr_pop <- berlin_cnt_super %>%
 plot_distr_pop
 ```
 
-### Service density plot by district
+## Service density plot by district
 
 First we look at stops passings density by district area size for all modes.
 For further plots, look into Rmd file or modify the code. The things that change are the tibble column, colour palette, subtitle and legend title.
@@ -418,9 +422,9 @@ plot_distr_serv_person
 
 One thing we can see is that Spandau is blessed with a lot of stop passings (especially bus) compared with its low population density.
 
-### Service density plot by Planungsraum
+## Service density plot by Planungsraum
 
-The mapping by district is very coarse. We swith to plotting by mode and by the more detailed Planungsräume. Here the code for one mode.
+The mapping by district is very coarse. We switch to plotting by mode and by the more detailed Planungsräume. Here the code for one mode.
 
 ```{r}
 # reread data after wrangling
@@ -626,9 +630,16 @@ plot_plan_serv_u
 
 ## list of sources
 
-https://rstudio-pubs-static.s3.amazonaws.com/234589_8188f8d6471f412b94dbc61f7b1aaa16.html (a lot)
-https://www.r-spatial.org/r/2018/10/25/ggplot2-sf-2.html
-https://r-spatial.github.io/sf/reference/st_transform.html
-https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
-https://stackoverflow.com/questions/43456524/how-to-find-which-polygon-a-point-belong-to-via-sf
-https://stackoverflow.com/questions/8161836/how-do-i-replace-na-values-with-zeros-in-an-r-dataframe#8166616
+Datafeelings: [Visualizing GTFS Data in R](https://rpubs.com/data_feelings/data607_gtfs)
+
+Mel Moreno, Mathieu Basille (2018): [Drawing beautiful maps programmatically with R, sf and ggplot2 — Part 2: Layers](https://www.r-spatial.org/r/2018/10/25/ggplot2-sf-2.html)
+
+Edzer Pebesma: [Transform or convert coordinates of simple feature](https://r-spatial.github.io/sf/reference/st_transform.html)
+
+Kazuhito [stackexchange] (2017): [Lon-Lat to Simple Features (sfg and sfc) in R](https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r)
+
+einar, kevinykuo [stackoverflow] (2017): [How to find which polygon a point belong to via sf](https://stackoverflow.com/questions/43456524/how-to-find-which-polygon-a-point-belong-to-via-sf)
+
+aL3xa, leerssej [stackoverflow] (2017): [How do I replace NA values with zeros in an R dataframe?](https://stackoverflow.com/questions/8161836/how-do-i-replace-na-values-with-zeros-in-an-r-dataframe#8166616)
+
+RStudio: [CheatSheets](https://rstudio.com/resources/cheatsheets/) (Simple Features, leaflet, data.table, R Markdown, Data Transformation, Data Import)
